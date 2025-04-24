@@ -65,7 +65,8 @@ word_replace_list = {
     'yen': 'いぇん',
     'war': 'うぉー',
     ', ': '、',
-    '. ': '。'
+    '. ': '。',
+    '?': '？'
 }
 kana_list = {
     'ア': 'あ',
@@ -146,6 +147,7 @@ kanji_list = {
     '御': 'お',
     '王': 'おう',
     '欧': 'おう',
+    '大': 'おお',
     '多': 'おお',
     '鬼': 'おに',
     '斧': 'おの',
@@ -160,7 +162,7 @@ kanji_list = {
     '尚': 'なお',
     '七': 'なな',
     '縄': 'なわ',
-    '何': 'なん',
+    '何': 'なに',
     '二': 'に',
     '荷': 'に',
     '煮': 'に',
@@ -228,7 +230,7 @@ kanji_list = {
 }
 replace_list = {**alphabet_list, **kana_list, **kanji_list}
 # 単独音 + 合成音 + 記号 + 漢字
-available_char = set(phonemes.keys()) | set(compound_phonemes.keys()) | {'ー', 'っ', '、', '。'} | set(replace_list.keys() | set(word_replace_list.keys()))
+available_char = set(phonemes.keys()) | set(compound_phonemes.keys()) | {'ー', 'っ', '、', '。', '？'} | set(replace_list.keys() | set(word_replace_list.keys()))
 # ソートする
 available_char = " | ".join(sorted(available_char))
 
@@ -243,12 +245,18 @@ def adjust_duration(duration, key_shift=0):
     return round(pitch_ratio * duration) / pitch_ratio
 # 音声生成
 def synthesize_sound(data, duration, key_shift=0):
-    data = shift_frequencies(data, key_shift)
-    t = np.linspace(0, adjust_duration(duration, key_shift), int(48000 * adjust_duration(duration, key_shift)), endpoint=False)
+    t = np.linspace(0, adjust_duration(duration, key_shift if isinstance(key_shift, (int, float)) else 0), int(48000 * adjust_duration(duration, key_shift if isinstance(key_shift, (int, float)) else 0)), endpoint=False)
     signal = np.zeros_like(t)
-    for db, freq in data:
+    if callable(key_shift):
+        pitch_func = key_shift
+    else:
+        pitch_func = lambda _: key_shift
+
+    for db, base_freq in data:
         amp = db_to_amplitude(db)
-        tone = amp * np.sin(2 * np.pi * freq * t)
+        freq_series = base_freq * 2 ** (np.array([pitch_func(x) for x in t]) / 12)
+        phase = 2 * np.pi * np.cumsum(freq_series) / 48000
+        tone = amp * np.sin(phase)
         signal += tone
     return signal / np.max(np.abs(signal))
 # 再起フレーズ分け
@@ -269,6 +277,12 @@ def speak_kana(text, key_shift=0):
     i = 0
     last_vowel = None
     while i < len(text):
+        # 疑問符チェック
+        if text[i] == '？' and last_vowel:
+            # ピッチが0→+4にスライドする関数を渡す
+            pitch_slide = lambda t: key_shift + 3 * (t / adjust_duration(prolong_duration))  # 0秒→4半音へ
+            sig = synthesize_sound(last_vowel, prolong_duration, pitch_slide)
+            signals.append(sig)
         if text[i] in pause_map:
             silence = np.zeros(int(48000 * pause_map[text[i]]))
             signals.append(silence)
@@ -281,7 +295,6 @@ def speak_kana(text, key_shift=0):
             silence = np.zeros(int(48000 * normal_duration))
             signals.append(silence)
             matched = False
-            # 最大2文字の合成音をチェック
             for length in [2, 1]:
                 if i + length <= len(text):
                     part = text[i:i+length]
@@ -298,7 +311,6 @@ def speak_kana(text, key_shift=0):
             if not matched:
                 print(f"⚠️ 未対応の文字: 「{text[i]}」")
                 i += 1
-
     if signals:
         full_signal = np.concatenate(signals)
         sd.play(full_signal)
@@ -340,5 +352,10 @@ pause_map = {
     'っ': 0.12,
     '、': 0.3,
     '。': 0.6,
+    '？': 0.6
 }
-speak("yeah, あーーーーーーニュニュニュ、イッヌイッヌ。あの女の姉の犬や兄のニャンニャン、青いねー。あの絵、何円なの。I no nan you.", 2)
+# デモ
+speak("あのー、あの犬何？青いねー。犬の王なのよ。",-3)
+speak("あの良い絵、何円なの？",2)
+speak("あの罠わ何？鬼や鵺用に大穴の罠をやんのよ。",0)
+speak("now, i know you.", 0)
